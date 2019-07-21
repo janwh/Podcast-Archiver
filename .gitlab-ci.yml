@@ -1,0 +1,82 @@
+stages:
+  - test
+  - build
+  - tag
+
+.python:
+  image: registry.gitlab.com/janw/python-poetry:3.7
+  stage: test
+  cache:
+    key: pip-cache-$CI_JOB_NAME
+    paths:
+      - .cache/pip
+      - .cache/poetry
+      - .pytest_cache
+  variables:
+    PIP_CACHE_DIR: "$CI_PROJECT_DIR/.cache/pip"
+  before_script:
+    - poetry config settings.virtualenvs.create true
+    - poetry config settings.virtualenvs.path $CI_PROJECT_DIR/.cache/poetry
+    - poetry --no-interaction install
+
+pytest:
+  extends: .python
+  script:
+    - poetry run pytest --junitxml=pytest.xml --vcr-record=none || if [ $? -eq 5 ]; then exit 0; fi
+    - poetry run coveralls
+  artifacts:
+    reports:
+      junit: pytest.xml
+  coverage: '/^TOTAL\s+\d+\s+\d+\s+([\d\.]+\%)$/'
+
+flake8:
+  allow_failure: true
+  extends: .python
+  before_script:
+    - pip install -U flake8 flake8-bugbear flake8-formatter-junit-xml
+  script:
+    - flake8 --format=junit-xml --tee --output-file flake8.xml
+  artifacts:
+    reports:
+      junit: flake8.xml
+
+black:
+  extends: .python
+  before_script:
+    - pip install -U black
+  script:
+    - black --check --verbose .
+
+.docker:
+  image: docker:stable
+  stage: build
+  variables:
+    DOCKER_DRIVER: overlay2
+  services:
+    - docker:dind
+  before_script:
+    - |
+      if [ -z "$DOCKER_HOST" -a "$KUBERNETES_PORT" ]; then
+        export DOCKER_HOST='tcp://localhost:2375'
+      fi
+    - docker login -u $CI_REGISTRY_USER -p $CI_REGISTRY_PASSWORD $CI_REGISTRY
+
+build:
+  extends: .docker
+  script:
+    - docker pull $CI_REGISTRY_IMAGE:latest || true
+    - docker build
+      --cache-from $CI_REGISTRY_IMAGE:latest
+      --tag $CI_REGISTRY_IMAGE:$CI_COMMIT_REF_SLUG .
+    - if [[ "$CI_COMMIT_REF_SLUG" == master ]]; then docker tag $CI_REGISTRY_IMAGE:$CI_COMMIT_REF_SLUG $CI_REGISTRY_IMAGE:master-$CI_COMMIT_SHORT_SHA; fi
+    - docker push $CI_REGISTRY_IMAGE:$CI_COMMIT_REF_SLUG
+
+tag latest:
+  extends: .docker
+  stage: tag
+  script:
+    - docker pull $CI_REGISTRY_IMAGE:$CI_COMMIT_REF_SLUG
+    - docker tag $CI_REGISTRY_IMAGE:$CI_COMMIT_REF_SLUG $CI_REGISTRY_IMAGE:latest
+    - docker push $CI_REGISTRY_IMAGE:latest
+  only:
+    - master

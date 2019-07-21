@@ -1,19 +1,27 @@
----
-engines:
+version: "2"
+checks:
+  complex-logic:
+    config:
+      threshold: 10
+  method-complexity:
+    config:
+      threshold: 10
+plugins:
   duplication:
     enabled: true
     config:
       languages:
       - python
-
   fixme:
     enabled: true
-
-  radon:
+  sonar-python:
     enabled: true
-    config: 
-      python_version: 3
-          
-ratings:
-  paths:
-  - "**.py"
+    config:
+      tests_patterns:
+        - tests/**
+
+exclude_patterns:
+  - htmlcov/*
+  - dist/*
+  - assets/*
+  - "*.egg-info/*"
